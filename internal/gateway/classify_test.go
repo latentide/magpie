@@ -465,11 +465,31 @@ func TestChatClassifierPicksTheEffort(t *testing.T) {
 	if !strings.Contains(a.last, `"reasoning_effort":"high"`) {
 		t.Fatalf("sent %s", a.last)
 	}
-	// the next turn is told what the one before needed
+	// the next turn is told what the one before needed, and keeps
+	// the warm cache's high effort rather than dropping to the
+	// request's own low when the classifier fails
 	c.set("9", 0)
 	_, r = postOK(t, s, "s1", chat("find why the cache races", []string{"go on"}, 0, `,"reasoning_effort":"low"`))
-	if r.Rule.Classified.AfterEffort != "high" || !strings.Contains(c.last(), "needed level 3") || !strings.Contains(r.Rule.Classified.Error, "not a level from 1 to 4") || r.Rule.Pick != "" {
-		t.Fatalf("turn 2: %+v %s", r.Rule.Classified, c.last())
+	if r.Rule.Classified.AfterEffort != "high" || !strings.Contains(c.last(), "needed level 3") || !strings.Contains(r.Rule.Classified.Error, "not a level from 1 to 4") || r.Rule.Pick != "high" || !strings.Contains(a.last, `"reasoning_effort":"high"`) {
+		t.Fatalf("turn 2: %+v %+v %s", r.Rule, r.Rule.Classified, c.last())
+	}
+	// when the classifier failed on a turn that went at medium, the
+	// next turn's warm cache still holds medium against a lower pick
+	classified.Lock()
+	delete(classified.failed, "c/cls")
+	classified.Unlock()
+	c.set("9", 0)
+	_, r = postOK(t, s, "s-keep", chat("explain the router", nil, 0, `,"reasoning_effort":"medium"`))
+	if r.Rule.Classified.Error == "" || r.Rule.Pick != "" || !strings.Contains(a.last, `"reasoning_effort":"medium"`) {
+		t.Fatalf("failed turn: %+v %s", r.Rule, a.last)
+	}
+	classified.Lock()
+	delete(classified.failed, "c/cls")
+	classified.Unlock()
+	c.set("1", 0) // low
+	_, r = postOK(t, s, "s-keep", chat("explain the router", []string{"thanks"}, 0, `,"reasoning_effort":"medium"`))
+	if r.Rule.Pick != "medium" || r.Rule.Wanted != "low" || !strings.Contains(a.last, `"reasoning_effort":"medium"`) {
+		t.Fatalf("after failed turn: %+v %s", r.Rule, a.last)
 	}
 	// an intent as well: two calls, one for each
 	g.Rules = []provider.Rule{{Use: "b/big", Intent: "debugging"}}
@@ -478,7 +498,7 @@ func TestChatClassifierPicksTheEffort(t *testing.T) {
 	}
 	c.set("1", 0)
 	_, r = postOK(t, s, "s2", chat("the parser drops a token", nil, 0, `,"reasoning_effort":"medium"`))
-	if r.Rule.N != 1 || r.Rule.Classified.Intent != "debugging" || r.Rule.Pick != "low" || c.n() != 4 {
+	if r.Rule.N != 1 || r.Rule.Classified.Intent != "debugging" || r.Rule.Pick != "low" || c.n() != 6 {
 		t.Fatalf("both: %+v %+v %d", r.Rule, r.Rule.Classified, c.n())
 	}
 }

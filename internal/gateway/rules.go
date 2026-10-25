@@ -329,8 +329,18 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		}
 		q.Intent = c.Intent
 		hit.Classified, hit.Pick = c, c.Effort
-		if effort && had && keepsEffort(tr, c.Effort, size, now) {
-			hit.Pick, hit.Wanted = tr.effort, c.Effort
+		if effort && had {
+			want := c.Effort
+			if want == "" {
+				// the classifier failed or timed out: the turn
+				// would fall back to the request's own effort
+				// (hit.Effort), which also drops a warm cache if
+				// the turn before went higher
+				want = hit.Effort
+			}
+			if keepsEffort(tr, want, size, now) {
+				hit.Pick, hit.Wanted = tr.effort, c.Effort
+			}
 		}
 	}
 	if i := provider.MatchRule(g.Rules, q); i >= 0 {
@@ -342,7 +352,15 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	if cur, ok := turnRules.m[key]; ok {
 		input, answered, hour = cur.input, cur.answered, cur.hour // answered while the classifier was asked
 	}
-	turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: input, intent: q.Intent, effort: hit.Pick, wanted: hit.Wanted, answered: answered, size: size, hour: hour}
+	keptEffort := hit.Pick
+	if keptEffort == "" && effort {
+		// a classifier that timed out or failed leaves hit.Pick blank so
+		// the request goes at its own effort (hit.Effort); record that
+		// effective effort in turnRules so keepsEffort still guards the
+		// warm cache on the next turn
+		keptEffort = hit.Effort
+	}
+	turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: input, intent: q.Intent, effort: keptEffort, wanted: hit.Wanted, answered: answered, size: size, hour: hour}
 	if len(turnRules.m) > 4096 {
 		for k, tr := range turnRules.m {
 			if now.Sub(tr.at) > stickKeep {
